@@ -1,0 +1,97 @@
+---
+title: "Presentation - Rejecetion Sampling"
+author: "Guðmundur Kr. Lee"
+date: "9/24/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(purrr)
+library(microbenchmark)
+library(Rcpp)
+library(ggplot2)
+library("profvis")
+library(MASS)
+library(parallel)
+library(numDeriv)
+setwd("~/Documents/Statistics - KU/Computational Statistics/Assignments")
+grid <-seq(0, 0.5, 0.001)
+pois <- read.table("Poisson.csv", sep = ",", header = TRUE)
+```
+
+#### How to evaluate the target density
+```{r}
+zx <- pois$z*pois$x
+x <- pois$x
+
+target_sapply <- function(y)
+{
+  sapply(y, function(yy) prod(exp(yy*zx - exp(x*yy)))) / 1.05009e-41 
+}
+
+
+target_sum <- function(y)
+{
+  sapply(y, function(yy) exp( sum(yy*zx - exp(x*yy)) )) / 1.05009e-41
+}
+
+
+target_outer <- function(y)
+{
+  exp( rowSums(outer(y, zx) - exp(outer(y, x))))/ 1.05009e-41
+  
+}
+```
+
+#### Our first implementation of the product is using the sapply function
+#### Next we use the supply function again but since taking a product of the exponential is the same as taking the exponential of the sum of the powers instead, Which makes it a bit faster. 
+#### And finally we do the same but now using the Outer-function.
+#### In all cases we divide with the normalizing constant that we found by integrating the functions from 0 to infinity.
+
+#### And when we compare we see:
+```{r}
+p <- microbenchmark(times = 200, target_sum(grid), target_sapply(grid), target_outer(grid))
+autoplot(p) + geom_jitter(aes(color = expr), alpha = 0.4) + aes(fill = I("gray"))+
+  scale_color_manual(values = c("#354e75", "#884091", "#c91246", "black")) + theme_bw() +
+  theme(legend.position = "none")
+```
+
+
+#### We see that the outer function is fastest, followed by the sapply using the sum of the powers and finally the sapply method is the slowest as one might expect.
+
+#### Thus we can plot our target density:
+```{r}
+range(grid)
+plot(grid,target_outer(grid), type = "l", lwd = 4, col = "#325b96", ylab = "Density", xlab = "")
+```
+
+#### To find our Gaussian envelope, we find the mean and sd of our target density and then we use th dnorm function to get a Gaussian density.
+```{r}
+mean <- integrate(function(v) target_sapply(v)*v, 0, Inf)$value
+sd <- sqrt(integrate(function(v) target_sapply(v)*v^2, 0, Inf)$value - mean^2)
+targetDens <- target_outer(grid)
+gausEnv <- dnorm(grid, mean, sd)
+```
+#### And when we add our gaussian envelope to our plot we get:
+```{r}
+plot(grid, targetDens, type = "l", lwd = 4, col = "#325b96", ylab = "Target density", xlab = "")
+lines(grid, gausEnv, col = "#ee961d", lwd =3)
+```
+
+#### We now want to find our alpha-parameter so we need to find the minimum of 
+```{r}
+plot(grid, gausEnv/targetDens, lwd =1, col = "#325b96" ,type = "l")
+```
+#### And by using the optimize function we get that our alpha parameter is 0.2378
+```{r}
+a <- optimize(function(z) dnorm(z, mean, sd)/target_sapply(z), c(0, 0.1))
+a <- a$objective
+```
+
+####So when we plot our first envelope we get: 
+```{r}
+plot(grid, a*target_sapply(grid), type = "l", lwd = 3,  col = "#325b96")
+lines(grid, dnorm(grid, mean, sd),  col = "#ee961d", lwd =3)
+```
+#### And clearly this could use some improvement.

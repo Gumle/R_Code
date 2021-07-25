@@ -1,0 +1,164 @@
+---
+title: "Exercises 1.4-1.10 <br> solution"
+author: "Niels Richard Hansen"
+date: "September 4, 2019"
+output:
+  xaringan::moon_reader:
+    css: ["default", "science.css"]
+    nature:
+      highlightLines: true
+      countIncrementalSlides: false
+      ratio: '16:10'
+      navigation:
+        scroll: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(purrr)
+library(microbenchmark)
+library(Rcpp)
+library(ggplot2)
+library("profvis")
+library(MASS)
+library(parallel)
+library(numDeriv)
+setwd("~/Documents/Statistics - KU/Computational Statistics/Assignments")
+set.seed(2)
+```
+
+Sample from the probability distribution on $[0;\infty[$ with a density
+$$f(y) \propto \prod_{i=1}^{100}\exp(yz_ix_i-e^{yx_i}), \text{ } y\geq 0$$
+Find a Gaussian envelope of $f$ and implement rejection sampling from the distribution with density $f$ using this envelope.
+---
+#### How to evaluate the target density
+```{r}
+pois <- read.table("Poisson.csv", sep = ",", header = TRUE)
+zx <- pois$z*pois$x
+x <- pois$x
+```
+
+Let's look at a couple of ways to compute this product.
+
+```{r}
+# Unnormalized
+
+target_sapply <- function(y){
+  sapply(y, function(yy) prod(exp(yy*zx - exp(x*yy))))
+}
+
+target_sum <- function(y){
+  sapply(y, function(yy) exp( sum(yy*zx - exp(x*yy)) ))
+}
+
+target_outer <- function(y){
+  exp( rowSums(outer(y, zx) - exp(outer(y, x))))
+}
+```
+---
+We see that these densities need to be normalized.
+
+```{r}
+value_sapply <- integrate(target_sapply, 0, Inf)$value
+value_sum <- integrate(target_sum, 0, Inf)$value
+value_outer <- integrate(target_outer, 0, Inf)$value
+```
+And we can compute:
+
+```{r}
+target_sapply <- function(y){
+  sapply(y, function(yy) prod(exp(yy*zx - exp(x*yy)))) / value_sapply
+}
+target_sum <- function(y){
+  sapply(y, function(yy) exp( sum(yy*zx - exp(x*yy)) )) / value_sum
+}
+target_outer <- function(y){
+  exp( rowSums(outer(y, zx) - exp(outer(y, x))))/ value_outer
+}
+```
+---
+```{r}
+grid <-seq(0, 0.5, 0.0001)
+```
+---
+#### See which method is the best.
+
+```{r, message = FALSE}
+p <- microbenchmark(times = 200, target_sum(grid), target_sapply(grid), target_outer(grid))
+autoplot(p) + geom_jitter(aes(color = expr), alpha = 0.4) + aes(fill = I("gray"))+
+  scale_color_manual(values = c("#354e75", "#884091", "#c91246", "black")) + theme_bw() +
+  theme(legend.position = "none")
+```
+---
+Since we need to find a Gaussian envelope
+
+```{r}
+mean <- integrate(function(v) target_sapply(v)*v, 0, Inf)$value
+sd <- sqrt(integrate(function(v) target_sapply(v)*v^2, 0, Inf)$value - mean^2)
+```
+---
+Let see what the target density
+```{r}
+plot(grid,target_outer(grid), type = "l", lwd = 4, col = "#325b96", ylab = "Density", xlab = "")
+```
+---
+#### what we need to minimize is
+
+```{r}
+plot(grid, dnorm(grid, mean, sd)/target_outer(grid), lwd =1, col = "#325b96" )
+```
+---
+We get
+```{r}
+a <- optimize(function(z) dnorm(z, mean, sd)/target_sapply(z), c(0, 0.1))
+a <- a$objective
+```
+
+So we get that our alpha is `r round(a,4)`. With the chosen alpha, we can replot the envelope and see what we get
+
+```{r}
+
+plot(grid, a*target_sapply(grid), type = "l", lwd = 3,  col = "#325b96",ylim  = c(0,7))
+lines(grid, dnorm(grid, mean, sd),  col = "#ee961d", lwd =3)
+```
+
+---
+We see that this is not good enough. with trial and error we found out that by increasing the standard deviation by 9% we get a much better estimate:
+```{r}
+a <- optimize(function(z) dnorm(z, mean, sd*1.09)/target_sapply(z), c(0, 0.1))
+a <- a$objective
+```
+
+So we get that our alpha is `r round(a,4)`. With the chosen alpha, we can replot the envelope and see what we get
+
+```{r}
+plot(grid, a*target_sapply(grid), type = "l", lwd = 3,  col = "#325b96")
+lines(grid, dnorm(grid, mean, sd),  col = "#ee961d", lwd =3)
+```
+
+We also tried to use the t-distribution to get an envelope:
+---
+```{r}
+at <- optimize(function(z) dt((z - 0.24)/(0.0554*1.055), 61.83)/(0.0554*1.055) / target_sapply(z), c(0, 0.4))$objective
+#t distribution
+plot(grid, at*target_sapply(grid), type = "l", lwd = 3,  col = "#325b96")
+lines(grid, dt((grid - 0.24)/(0.0554*1.055), 61.83)/(0.0554*1.055),  col = "#ee961d", lwd =3)
+```
+
+We now look at two different implementations
+```{r}
+proposal_factory <- function(target_dens, proposal_dens, proposal_sim, a)
+{
+  list( tdens = target_dens, pdens = proposal_dens, sim = proposal_sim, alpha = a)
+}
+propn <- proposal_factory(target_outer, function(x) dnorm(x, 0.2388885, 0.061235426), function(x) rnorm(x, 0.2388885, 0.06123542), 0.9163125)
+propt <- proposal_factory(  
+  target_outer,
+  function(x) dt((x - 0.24)/(0.0554*1.055), 61.83)/(0.0554*1.055),
+  function(x) rt(x, 61.83)*0.0554*1.055 + 0.24,
+  0.95
+)
+```
+
+# Setja inn kóða með fyrri implementation.
+

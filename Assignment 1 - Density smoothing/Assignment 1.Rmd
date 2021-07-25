@@ -1,0 +1,166 @@
+---
+title: "Assignment 1 - Smoothing"
+author: "Guðmundur Kr. Lee"
+date: "9/11/2019"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(MASS)
+library(stats)
+library(microbenchmark)
+library(ggplot2)
+library(kedd)
+library(caret)
+setwd("~/Documents/Statistics - KU/Computational Statistics")
+infrared <- read.table("infrared.txt", header = TRUE)
+F12 <- infrared$F12
+F12 <- log(F12)
+```
+
+```{r, include = FALSE}
+EKernel <- function(x){
+  ifelse(-1 <= x & x<= 1,x <- (3/4)*(1-x^2), 0) }
+# f > 0 2
+integrate(EKernel, lower = -1, upper = 1) # Show that this is a density
+integrate(function(x) x*(3/4)*(1-x^2), lower = -1, upper = 1) # Find the mean, E[...]
+integrate(function(x) x^2*(3/4)*(1-x^2), lower = -1, upper = 1) # Find the Var
+integrate(function(x) (x^2*(3/4)*(1-x^2))^2, lower = -1, upper = 1) # Find the L-2 norm
+```
+
+## Implementation
+
+Implement a kernel density estimator using the Epanechnikov kernel, 
+$$K(x) = \frac{3}{4}(1-x^2)1_{[-1,1]}(x),$$
+
+#### Vectorized implementation
+```{r}
+kd <- function(x, h, m=512) {
+  rg <- range(x)
+  xx <-  seq(rg[1] - 3 * h, rg[2] + 3 * h, length.out = m)
+  const <-   const <- 3/(4*h*length(x))
+  condition <-  lapply(xx, function(z) z - x)
+  values <-  lapply(condition, function(z) sapply(z, function(x) ifelse(abs(x) <= h, 1 - (x/h)^2, 0  ) ) )
+  y <-  sapply(values, function(z) sum(z)*const)
+  
+  list(x = xx, y = y)
+}
+```
+
+**And by plotting agains our F12 data we get:**
+
+```{r}
+f_hat <- kd(F12, h = 3)
+f_hat_dens <- density(F12, bw = 1, n = 512, kernel = "epanechnikov")
+hist(F12, probability = TRUE)
+lines(f_hat, col = "Blue")
+lines(f_hat_dens, col = "Red")
+```
+
+#### Next we implament a density using one loop:
+
+```{r}
+kd2 <- function (x, h, m = 512) {
+  rg <- range(x)
+  ## xx is equivalent to grid points in 'density'
+  xx <- seq(rg[1] - 3 * h, rg[2] + 3 * h, length.out = m)
+  y <- numeric(m) ## The evaluations, initialized as a vector of zeroes
+  ## The actual computation is done using nested for-loops. The outer loop
+  ## is over the grid points, and the inner loop is over the data points.
+  const <- 3/(4* h*length(x))
+  for (i in seq_along(xx)){
+  condition <- xx[i]- x
+  kde <- ifelse(abs(condition) <= h, 1 - (condition/h)^2, 0)
+  y[i] <- sum(kde)*const}
+  list(x = xx, y = y)
+}
+```
+
+Plot the outcome:
+
+```{r}
+f_hat2 <- kd2(F12, h = 1)
+hist(F12, probability = TRUE)
+lines(f_hat2, col = "Blue")
+lines(f_hat_dens, col = "Red")
+```
+
+#### and finally an implementaion using a double loop:
+
+```{r}
+kd3 <- function (x, h, m = 512) {
+  rg <- range(x)
+  ## xx is equivalent to grid points in 'density'
+  xx <- seq(rg[1] - 3 * h, rg[2] + 3 * h, length.out = m)
+  y <- numeric(m) ## The evaluations, initialized as a vector of zeroes
+  ## The actual computation is done using nested for-loops. The outer loop
+  ## is over the grid points, and the inner loop is over the data points.
+  const <- 3/(4* h*length(x))
+  for (i in seq_along(xx))
+    for (j in seq_along(x))
+     if(abs(xx[i] - x[j]) <= h){
+       y[i] <- y[i] + (1 - ((xx[i] - x[j])/h)^2)
+     } else {
+       y[i] <- y[i]
+     }
+  y <- y * const 
+  list(x = xx, y = y)
+}
+```
+
+```{r}
+library(Rcpp)
+```
+
+Plot the outcome:
+
+```{r}
+f_hat3 <- kd3(F12, h = 1)
+hist(F12, probability = TRUE)
+lines(f_hat3, col = "Blue")
+lines(f_hat_dens, col = "Red")
+```
+
+and comparing the images
+
+```{r}
+par(mfrow=c(2,2))
+hist(F12, probability = TRUE, main = "Vectorized") # No loops => Vectorized
+lines(f_hat, col = "Blue")
+hist(F12, probability = TRUE, main = "One loop") # One loop
+lines(f_hat2, col = "Blue")
+hist(F12, probability = TRUE, main = "Double loop") # Double loop
+lines(f_hat3, col = "Blue")
+hist(F12, probability = TRUE, main = "Density function")
+lines(f_hat_dens, col = "Red") # Density-function
+```
+
+## Benchmarking
+
+```{r}
+system.time(kd(F12,1))
+system.time(kd2(F12,1))
+system.time(kd3(F12,1))
+system.time(density(F12, bw = 1, n = 512, kernel = "epanechnikov"))
+```
+
+
+
+```{r}
+kern_bench <- microbenchmark(kd(F12, 1),kd2(F12, 1), kd3(F12, 1), density(F12, bw = 1, n = 512, kernel = "epanechnikov"))
+str(kern_bench)
+```
+
+And visulized:
+
+```{r}
+autoplot(kern_bench) + 
+  geom_jitter(position = position_jitter(0.2, 0), 
+              aes(color = expr), alpha = 0.4) + 
+  aes(fill = I("gray")) + 
+  theme(legend.position = "none")
+```
+
